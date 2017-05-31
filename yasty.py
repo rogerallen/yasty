@@ -259,7 +259,10 @@ class Application(object):
             sys.exit(1)
         # convert weights string to an array
         print(self.args.style_weights)
-        self.args.style_weights = json.loads(self.args.style_weights)
+        self.args.style_weights   = json.loads(self.args.style_weights)
+        self.args.style_block_min = int(self.args.style_block_min)
+        self.args.style_block_max = int(self.args.style_block_max)
+        self.args.num_iterations  = int(self.args.num_iterations)
 
     def adjust_logging_level(self):
         """adjust logging level based on verbosity option
