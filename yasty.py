@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
-yasty.py - yet another stylistic transfer deep learning thing
+yasty.py - yet another stylistic transfer deep learning image creator.
 
+by Roger Allen
 Heavily based on code from Lesson 8 of Fast.ai Practical Deep Learning
 
 Written to work with this anaconda environment.
 https://gist.github.com/rogerallen/f96d0dce129d18ee9351737b20b1f521/c244b37b3e59fad0ae3eafbb32269855f7f9e2f7
-Anaconda Python3.5 Keras1.2.2 Tensorflow1.0.1
+Anaconda Python 3.5, Keras 1.2.2, Tensorflow 1.0.1
 
 activate dl2_p35k12tf10
+
+Apache License, Version 2.0, January 2004, http://www.apache.org/licenses/
 
 """
 import os
@@ -16,11 +19,12 @@ import sys
 import logging
 import argparse
 import configparser
-#
+import json
+
+# remove tensorflow spam
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
 import keras
-import keras.backend as K
-from keras.models import Model
 import numpy as np
 from PIL import Image
 from vgg16_avg import VGG16_Avg
@@ -28,12 +32,13 @@ from scipy.optimize import fmin_l_bfgs_b
 from scipy.misc import imsave
 
 # ======================================================================
+# FIXME - grok this
 def gram_matrix(x):
     # We want each row to be a channel, and the columns to be flattened x,y locations
-    features = K.batch_flatten(K.permute_dimensions(x, (2, 0, 1)))
+    features = keras.backend.batch_flatten(keras.backend.permute_dimensions(x, (2, 0, 1)))
     # The dot product of this with its transpose shows the correlation
     # between each pair of channels
-    return K.dot(features, K.transpose(features)) / x.get_shape().num_elements()
+    return keras.backend.dot(features, keras.backend.transpose(features)) / x.get_shape().num_elements()
 
 def style_loss(x, targ):
     return keras.metrics.mse(gram_matrix(x), gram_matrix(targ))
@@ -44,16 +49,18 @@ deproc = lambda x,s: np.clip(x.reshape(s)[:, :, :, ::-1] + rn_mean, 0, 255)
 # FIXME do blotchy random
 rand_img = lambda shape: np.random.uniform(-2.5, 2.5, shape)/100
 
-def solve_image(eval_obj, niter, x, shp):
+# FIXME - grok this
+def solve_image(eval_obj, output_path, niter, x, shp):
     for i in range(niter):
         x, min_val, info = fmin_l_bfgs_b(eval_obj.loss, x.flatten(),
                                          fprime=eval_obj.grads, maxfun=20)
         x = np.clip(x, -127,127)
-        print('Current loss value:', min_val)
-        # FIXME
-        imsave('iteration_%d.png'%(i), deproc(x.copy(), shp)[0])
+        filename = output_path+'_%02d.png'%(i)
+        logging.info('%s loss: %.2f'%(filename, min_val))
+        imsave(filename, deproc(x.copy(), shp)[0])
     return x
 
+# FIXME - grok this
 class Evaluator(object):
     def __init__(self, f, shp):
         self.f, self.shp = f, shp
@@ -138,27 +145,25 @@ class Application(object):
         shape = self.input_image_array.shape # both images now have same shape
         model = VGG16_Avg(include_top=False, input_shape=shape[1:])
         outputs = {l.name: l.output for l in model.layers}
-        # FIXME add these as parameters
-        style_layers = [outputs['block{}_conv1'.format(o)] for o in range(1,6)]
-        content_name = 'block4_conv1'
+        style_layers = [outputs['block{}{}'.format(o,self.args.style_suffix)]
+                        for o in range(self.args.style_block_min,self.args.style_block_max)]
+        content_name = self.args.content_layer
         content_layer = outputs[content_name]
-        style_model = Model(model.input, style_layers)
-        style_targs = [K.variable(o) for o in style_model.predict(self.style_image_array)]
-        content_model = Model(model.input, content_layer)
-        content_targ = K.variable(content_model.predict(self.input_image_array))
-        # FIXME add parameters
-        style_wgts = [0.05,0.2,0.2,0.25,0.3]
+        style_model = keras.models.Model(model.input, style_layers)
+        style_targs = [keras.backend.variable(o) for o in style_model.predict(self.style_image_array)]
+        content_model = keras.models.Model(model.input, content_layer)
+        content_targ = keras.backend.variable(content_model.predict(self.input_image_array))
+        style_wgts = self.args.style_weights
         loss = sum(style_loss(l1[0], l2[0])*w
                    for l1,l2,w in zip(style_layers, style_targs, style_wgts))
         loss += keras.metrics.mse(content_layer, content_targ)/10 # ??? FIXME: why div 10
-        grads = K.gradients(loss, model.input)
-        self.transfer_fn = K.function([model.input], [loss]+grads)
+        grads = keras.backend.gradients(loss, model.input)
+        self.transfer_fn = keras.backend.function([model.input], [loss]+grads)
 
     def evaluate(self):
         evaluator = Evaluator(self.transfer_fn, self.input_image_array.shape)
-        iterations=10 # FIXME
         x = rand_img(self.input_image_array.shape)
-        x = solve_image(evaluator, iterations, x, self.input_image_array.shape)
+        x = solve_image(evaluator, self.args.output_image, self.args.num_iterations, x, self.input_image_array.shape)
 
     def run(self):
         """The Application main run routine
@@ -185,7 +190,7 @@ class Application(object):
             "-v","--verbose",
             dest="verbose",
             action='count',
-            default=self.config.get("options","verbose",0),
+            default=self.config.get("options", "verbose", 0),
             help="Increase verbosity (add once for INFO, twice for DEBUG)"
         )
         parser.add_argument(
@@ -197,14 +202,50 @@ class Application(object):
         parser.add_argument(
             "-o","--output",
             dest="output_image",
-            default=None,
-            help="path to input image (REQUIRED)"
+            default=self.config.get("options", "output_image", None),
+            help="path to output image (REQUIRED).  Will add iteration number.png to this."
         )
         parser.add_argument(
             "-s","--style",
             dest="style_image",
             default=None,
             help="path to style image (REQUIRED)"
+        )
+        parser.add_argument(
+            "-n","--num_iterations",
+            dest="num_iterations",
+            default=self.config.get("options", "num_iterations", 9),
+            help="Number of iterations to do.  Will save an image for each one."
+        )
+        parser.add_argument(
+            "--style_block_min",
+            dest="style_block_min",
+            default=self.config.get("layers", "style_block_min", 1),
+            help="min layer for style block%%d."
+        )
+        parser.add_argument(
+            "--style_block_max",
+            dest="style_block_max",
+            default=self.config.get("layers", "style_block_max", 6),
+            help="max layer for style block%%d."
+        )
+        parser.add_argument(
+            "--style_suffix",
+            dest="style_suffix",
+            default=self.config.get("layers", "style_suffix", "_conv1"),
+            help="suffix for style blocks."
+        )
+        parser.add_argument(
+            "--style_weights",
+            dest="style_weights",
+            default=self.config.get("layers", "style_weights", "[0.1,0.2,0.2,0.2,0.2,0.3]"),
+            help="suffix for style blocks."
+        )
+        parser.add_argument(
+            "--content_layer",
+            dest="content_layer",
+            default=self.config.get("layers", "content_layer", "block4_conv1"),
+            help="layer for content error check."
         )
         self.args = parser.parse_args(argv)
         if self.args.input_image == None:
@@ -216,6 +257,9 @@ class Application(object):
         if self.args.output_image == None:
             print("Error: must provide output image",file=sys.stderr)
             sys.exit(1)
+        # convert weights string to an array
+        print(self.args.style_weights)
+        self.args.style_weights = json.loads(self.args.style_weights)
 
     def adjust_logging_level(self):
         """adjust logging level based on verbosity option
