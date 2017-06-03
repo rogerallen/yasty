@@ -32,7 +32,6 @@ from scipy.optimize import fmin_l_bfgs_b
 from scipy.misc import imsave
 
 # ======================================================================
-# FIXME - grok this
 def gram_matrix(x):
     # We want each row to be a channel, and the columns to be flattened x,y locations
     features = keras.backend.batch_flatten(keras.backend.permute_dimensions(x, (2, 0, 1)))
@@ -49,7 +48,6 @@ deproc = lambda x,s: np.clip(x.reshape(s)[:, :, :, ::-1] + rn_mean, 0, 255)
 # FIXME do blotchy random
 rand_img = lambda shape: np.random.uniform(-2.5, 2.5, shape)/100
 
-# FIXME - grok this
 def solve_image(eval_obj, output_path, niter, x, shp):
     for i in range(niter):
         x, min_val, info = fmin_l_bfgs_b(eval_obj.loss, x.flatten(),
@@ -60,7 +58,6 @@ def solve_image(eval_obj, output_path, niter, x, shp):
         imsave(filename, deproc(x.copy(), shp)[0])
     return x
 
-# FIXME - grok this
 class Evaluator(object):
     def __init__(self, f, shp):
         self.f, self.shp = f, shp
@@ -117,8 +114,8 @@ class Application(object):
         logging.info("resizing style image by %.2f"%(ratio))
         self.style_image = self.style_image.resize((int(self.style_image.width*ratio),int(self.style_image.height*ratio)),Image.BICUBIC)
         # now crop to match
-        logging.debug("1 input w,h = %d,%d"%(self.input_image.width,self.input_image.height))
-        logging.debug("  style w,h = %d,%d"%(self.style_image.width,self.style_image.height))
+        #logging.debug("1 input w,h = %d,%d"%(self.input_image.width,self.input_image.height))
+        #logging.debug("  style w,h = %d,%d"%(self.style_image.width,self.style_image.height))
         if self.style_image.width > self.input_image.width:
             delta = self.style_image.width - self.input_image.width
             a = int(delta/2)
@@ -133,10 +130,11 @@ class Application(object):
             logging.debug("crop %d %d from vertical"%(a,b))
             self.style_image = self.style_image.crop((0,a,self.style_image.width,self.style_image.height - b))
             self.style_image.load() # ?
-        logging.debug("2 input w,h = %d,%d"%(self.input_image.width,self.input_image.height))
-        logging.debug("  style w,h = %d,%d"%(self.style_image.width,self.style_image.height))
+        #logging.debug("2 input w,h = %d,%d"%(self.input_image.width,self.input_image.height))
+        #logging.debug("  style w,h = %d,%d"%(self.style_image.width,self.style_image.height))
         assert(self.style_image.width == self.input_image.width)
         assert(self.style_image.height == self.input_image.height)
+        self.style_image.save(self.args.output_image+"_cropped_style.png")
         # adjust to 1,w,h,3(rgb) array & remove mean
         self.input_image_array = preproc(np.expand_dims(np.array(self.input_image), 0))
         self.style_image_array = preproc(np.expand_dims(np.array(self.style_image), 0))
@@ -156,7 +154,7 @@ class Application(object):
         style_wgts = self.args.style_weights
         loss = sum(style_loss(l1[0], l2[0])*w
                    for l1,l2,w in zip(style_layers, style_targs, style_wgts))
-        loss += keras.metrics.mse(content_layer, content_targ)/10 # ??? FIXME: why div 10
+        loss += keras.metrics.mse(content_layer, content_targ)*self.args.content_weight
         grads = keras.backend.gradients(loss, model.input)
         self.transfer_fn = keras.backend.function([model.input], [loss]+grads)
 
@@ -239,13 +237,19 @@ class Application(object):
             "--style_weights",
             dest="style_weights",
             default=self.config.get("layers", "style_weights", "[0.1,0.2,0.2,0.2,0.2,0.3]"),
-            help="suffix for style blocks."
+            help="array of weights for style blocks. Should be max-min+1 in size."
         )
         parser.add_argument(
             "--content_layer",
             dest="content_layer",
             default=self.config.get("layers", "content_layer", "block4_conv1"),
             help="layer for content error check."
+        )
+        parser.add_argument(
+            "--content_weight",
+            dest="content_weight",
+            default=self.config.get("layers", "content_weight", 0.1),
+            help="weight for content when doing error check."
         )
         self.args = parser.parse_args(argv)
         if self.args.input_image == None:
@@ -262,6 +266,7 @@ class Application(object):
         self.args.style_weights   = json.loads(self.args.style_weights)
         self.args.style_block_min = int(self.args.style_block_min)
         self.args.style_block_max = int(self.args.style_block_max)
+        self.args.content_weight  = float(self.args.content_weight)
         self.args.num_iterations  = int(self.args.num_iterations)
 
     def adjust_logging_level(self):
